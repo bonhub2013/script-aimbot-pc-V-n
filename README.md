@@ -1,7 +1,5 @@
--- V/n ULTIMATE COMBAT SUITE v6.0
--- Hoàn chỉnh: Auto Aimbot + POV + Wall Check + ESP + Mobile UI
-
--- ==================== KHAI BÁO DỊCH VỤ ====================
+-- V/n ULTIMATE SUITE v7.0 - AIMBOT + ESP + POV + RADAR BUTTON
+-- ==================== SERVICES ====================
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
@@ -20,19 +18,19 @@ if not Drawing then
     return
 end
 
-print("🚀 V/n Ultimate Suite v6.0 đang khởi động...")
+print("🚀 V/n Ultimate Suite v7.0 đang khởi động...")
 
--- ==================== CẤU HÌNH HOÀN CHỈNH ====================
+-- ==================== CONFIG ====================
 local Config = {
     Aimbot = {
-        Enabled = true, -- Auto aim không cần phím
-        Strength = 0.75, -- 75% lock strength
+        Enabled = true,
+        Strength = 0.75,
         Smoothing = 0.2,
-        FOV = 200,
+        FOV = 150,
         Bone = "Head",
         TeamCheck = true,
         WallCheck = true,
-        AutoAim = true, -- Tự động aim
+        AutoAim = true,
         Prediction = 0.15,
         FirstPerson = true,
         ThirdPerson = true,
@@ -41,10 +39,10 @@ local Config = {
     
     POVCircle = {
         Enabled = true,
-        OuterRadius = 150, -- 50-200
+        OuterRadius = 150,
         InnerRadius = 75,
-        ColorNormal = Color3.fromRGB(0, 0, 0), -- Đen
-        ColorTarget = Color3.fromRGB(0, 255, 100), -- Xanh lá
+        ColorNormal = Color3.fromRGB(0, 0, 0),
+        ColorTarget = Color3.fromRGB(0, 255, 100),
         Thickness = 2,
         MinRadius = 50,
         MaxRadius = 200
@@ -67,7 +65,9 @@ local Config = {
         TeamColor = true,
         EnemyColor = Color3.fromRGB(255, 50, 50),
         FriendlyColor = Color3.fromRGB(50, 200, 50),
-        TextSize = 14
+        TextSize = 14,
+        ShowBox = true,
+        ShowHighlight = true,
     },
     
     UI = {
@@ -88,29 +88,34 @@ local State = {
     Target = nil,
     LastTargetTime = 0,
     TargetLockTime = 1.0,
-    UIVisible = true
+    UIVisible = true,
+    TargetBehindWall = false
 }
 
--- ==================== WALL CHECK THÔNG MINH ====================
-local function IsValidTarget(targetPosition, targetCharacter)
-    if not Config.WallCheck.Enabled then return true end
+-- Biến cho Radar
+local RadarInstance = nil
+local RadarToggleState = false
+
+-- ==================== WALL CHECK ====================
+local function IsTargetBehindWall(targetPosition, targetCharacter)
+    if not Config.WallCheck.Enabled then return false end
     
     local myChar = LocalPlayer.Character
-    if not myChar then return false end
+    if not myChar then return true end
     
     local myHead = myChar:FindFirstChild("Head")
-    if not myHead then return false end
+    if not myHead then return true end
     
     local distance = (targetPosition - myHead.Position).Magnitude
-    if distance > Config.WallCheck.MaxDistance then return false end
     
-    -- Tạo raycast parameters
+    if distance < 5 then return false end
+    if distance > Config.WallCheck.MaxDistance then return true end
+    
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Blacklist
     params.FilterDescendantsInstances = {myChar}
     params.IgnoreWater = true
     
-    -- Thêm tool/weapon vào blacklist
     if Config.WallCheck.IgnoreTools then
         for _, player in pairs(Players:GetPlayers()) do
             local char = player.Character
@@ -132,36 +137,33 @@ local function IsValidTarget(targetPosition, targetCharacter)
         end
     end
     
-    -- Thực hiện raycast
     local origin = myHead.Position + Vector3.new(0, 1, 0)
     local direction = (targetPosition - origin).Unit
     local result = Workspace:Raycast(origin, direction * distance, params)
     
     if result then
         local hit = result.Instance
-        
-        -- Bỏ qua nếu là character của target
         if targetCharacter and hit:IsDescendantOf(targetCharacter) then
-            return true
+            return false
         end
-        
-        -- Bỏ qua vật liệu trong suốt
         if hit.Material == Enum.Material.Glass or 
            hit.Material == Enum.Material.Water or
            hit.Material == Enum.Material.Air or
            hit.Material == Enum.Material.ForceField then
-            return true
+            return false
         end
-        
-        -- Có tường chắn
-        return false
+        return true
     end
-    
-    return true
+    return false
 end
 
--- ==================== VÒNG POV HÌNH TRÒN ====================
+-- ==================== POV CIRCLE ====================
 local function CreatePOVCircles()
+    if Drawings.POV.Outer then
+        Drawings.POV.Outer:Remove()
+        Drawings.POV.Inner:Remove()
+    end
+    
     Drawings.POV.Outer = Drawing.new("Circle")
     Drawings.POV.Inner = Drawing.new("Circle")
     
@@ -185,7 +187,6 @@ end
 
 local function UpdatePOVPosition()
     if not Drawings.POV.Outer then return end
-    
     local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
     Drawings.POV.Outer.Position = screenCenter
     Drawings.POV.Inner.Position = screenCenter
@@ -193,13 +194,12 @@ end
 
 local function UpdatePOVColor(isTarget)
     if not Drawings.POV.Outer then return end
-    
     local color = isTarget and Config.POVCircle.ColorTarget or Config.POVCircle.ColorNormal
     Drawings.POV.Outer.Color = color
     Drawings.POV.Inner.Color = color
 end
 
--- ==================== AUTO AIMBOT 75% ====================
+-- ==================== FIND BEST TARGET ====================
 local function FindBestTarget()
     if not Config.Aimbot.Enabled then return nil end
     
@@ -209,11 +209,8 @@ local function FindBestTarget()
     
     for _, player in pairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
-        
-        if Config.Aimbot.TeamCheck then
-            if player.Team and LocalPlayer.Team and player.Team == LocalPlayer.Team then
-                continue
-            end
+        if Config.Aimbot.TeamCheck and player.Team and LocalPlayer.Team and player.Team == LocalPlayer.Team then
+            continue
         end
         
         local character = player.Character
@@ -224,43 +221,44 @@ local function FindBestTarget()
         
         local targetPart = character:FindFirstChild(Config.Aimbot.Bone) or
                           character:FindFirstChild("HumanoidRootPart") or
-                          character:FindFirstChild("Torso")
+                          character:FindFirstChild("Torso") or
+                          character:FindFirstChild("UpperTorso") or
+                          character:FindFirstChild("LowerTorso") or
+                          character:FindFirstChild("Head")
         if not targetPart then continue end
         
-        -- Kiểm tra khoảng cách
         local distance = (targetPart.Position - Camera.CFrame.Position).Magnitude
         if distance > Config.Aimbot.MaxDistance then continue end
         
-        -- Wall check
         if Config.Aimbot.WallCheck then
-            if not IsValidTarget(targetPart.Position, character) then
+            if IsTargetBehindWall(targetPart.Position, character) then
                 continue
             end
         end
         
-        -- Kiểm tra trên màn hình
         local screenPos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
         if not onScreen then continue end
         
         local pos2D = Vector2.new(screenPos.X, screenPos.Y)
         local screenDistance = (pos2D - screenCenter).Magnitude
         
-        -- Kiểm tra trong FOV và POV circle
-        if screenDistance < bestDistance and screenDistance <= Config.POVCircle.OuterRadius then
-            bestDistance = screenDistance
-            bestTarget = {
-                Player = player,
-                Part = targetPart,
-                Position = targetPart.Position,
-                Distance = distance,
-                ScreenDistance = screenDistance
-            }
+        if screenDistance <= Config.POVCircle.OuterRadius then
+            if screenDistance < bestDistance then
+                bestDistance = screenDistance
+                bestTarget = {
+                    Player = player,
+                    Part = targetPart,
+                    Position = targetPart.Position,
+                    Distance = distance,
+                    ScreenDistance = screenDistance
+                }
+            end
         end
     end
-    
     return bestTarget
 end
 
+-- ==================== AUTO AIMBOT ====================
 local function PerformAutoAim()
     if not Config.Aimbot.Enabled or not Config.Aimbot.AutoAim then
         UpdatePOVColor(false)
@@ -269,7 +267,20 @@ local function PerformAutoAim()
     
     local currentTime = tick()
     
-    -- Kiểm tra target cũ còn hợp lệ không
+    if State.Target then
+        local target = State.Target
+        if not target.Player or not target.Player.Parent then
+            State.Target = nil
+            State.TargetBehindWall = false
+        else
+            local character = target.Player.Character
+            if not character then
+                State.Target = nil
+                State.TargetBehindWall = false
+            end
+        end
+    end
+    
     if State.Target then
         local target = State.Target
         local character = target.Player.Character
@@ -280,58 +291,57 @@ local function PerformAutoAim()
                               character:FindFirstChild("HumanoidRootPart")
             
             if humanoid and humanoid.Health > 0 and targetPart then
-                -- Kiểm tra wall check
-                if Config.Aimbot.WallCheck then
-                    if not IsValidTarget(targetPart.Position, character) then
-                        State.Target = nil
-                    end
-                end
-                
-                -- Kiểm tra trên màn hình
                 local screenPos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
-                if onScreen then
-                    -- Cập nhật target
+                
+                local isBehindWall = false
+                if Config.Aimbot.WallCheck then
+                    isBehindWall = IsTargetBehindWall(targetPart.Position, character)
+                end
+                State.TargetBehindWall = isBehindWall
+                
+                if onScreen and not isBehindWall then
                     State.Target.Part = targetPart
                     State.Target.Position = targetPart.Position
                     State.LastTargetTime = currentTime
                     
-                    -- Thực hiện aim
                     local currentCF = Camera.CFrame
                     local targetPos = targetPart.Position
-                    
-                    -- Dự đoán chuyển động
                     if targetPart.Velocity then
                         targetPos = targetPos + (targetPart.Velocity * Config.Aimbot.Prediction)
                     end
                     
-                    -- 75% lock strength
                     local desiredDirection = (targetPos - currentCF.Position).Unit
                     local currentDirection = currentCF.LookVector
                     local newDirection = currentDirection:Lerp(desiredDirection, Config.Aimbot.Strength * Config.Aimbot.Smoothing)
                     
-                    -- Cập nhật camera
                     Camera.CFrame = CFrame.new(currentCF.Position, currentCF.Position + newDirection)
-                    
                     UpdatePOVColor(true)
                     return true
+                else
+                    UpdatePOVColor(false)
+                    return false
                 end
+            else
+                State.Target = nil
+                State.TargetBehindWall = false
             end
+        else
+            State.Target = nil
+            State.TargetBehindWall = false
         end
-        
-        State.Target = nil
     end
     
-    -- Tìm target mới
     if not State.Target or (currentTime - State.LastTargetTime) > State.TargetLockTime then
         local newTarget = FindBestTarget()
-        
         if newTarget then
             State.Target = newTarget
             State.LastTargetTime = currentTime
+            State.TargetBehindWall = false
             UpdatePOVColor(true)
             return true
         else
             State.Target = nil
+            State.TargetBehindWall = false
             UpdatePOVColor(false)
         end
     end
@@ -340,7 +350,7 @@ local function PerformAutoAim()
     return false
 end
 
--- ==================== ESP 4000M ====================
+-- ==================== ESP ====================
 local function CreateESP(player)
     if Drawings.ESP[player] then return end
     
@@ -349,7 +359,9 @@ local function CreateESP(player)
         HealthBar = Drawing.new("Square"),
         HealthBarFill = Drawing.new("Square"),
         HealthText = Drawing.new("Text"),
-        DistanceText = Drawing.new("Text")
+        DistanceText = Drawing.new("Text"),
+        Box = Drawing.new("Square"),
+        Highlight = Drawing.new("Square")
     }
     
     for _, drawing in pairs(drawings) do
@@ -358,12 +370,19 @@ local function CreateESP(player)
     
     drawings.Name.Size = Config.ESP.TextSize
     drawings.Name.Outline = true
-    
     drawings.HealthText.Size = Config.ESP.TextSize - 2
     drawings.HealthText.Outline = true
-    
     drawings.DistanceText.Size = Config.ESP.TextSize - 2
     drawings.DistanceText.Outline = true
+    
+    drawings.Box.Thickness = 2
+    drawings.Box.Filled = false
+    drawings.Box.Transparency = 1
+    
+    drawings.Highlight.Thickness = 0
+    drawings.Highlight.Filled = true
+    drawings.Highlight.Transparency = 0.7
+    drawings.Highlight.Color = Color3.fromRGB(255, 255, 0)
     
     Drawings.ESP[player] = drawings
 end
@@ -405,69 +424,91 @@ local function UpdateESP()
                 local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
                 
                 if onScreen then
-                    -- Xác định màu
                     local color = Config.ESP.EnemyColor
                     if Config.ESP.TeamColor and player.Team and LocalPlayer.Team and player.Team == LocalPlayer.Team then
                         color = Config.ESP.FriendlyColor
                     end
                     
-                    -- TÊN
-                    if Config.ESP.ShowName then
-                        drawings.Name.Visible = true
-                        drawings.Name.Text = player.Name
-                        drawings.Name.Position = Vector2.new(screenPos.X, screenPos.Y - 35)
-                        drawings.Name.Color = color
-                    else
-                        drawings.Name.Visible = false
+                    local rootPart = character:FindFirstChild("HumanoidRootPart") or 
+                                     character:FindFirstChild("Torso") or 
+                                     character:FindFirstChild("UpperTorso") or
+                                     character:FindFirstChild("LowerTorso")
+                    
+                    local boxHeight = 70
+                    local boxWidth = 40
+                    
+                    if rootPart then
+                        local rootPos, rootOnScreen = Camera:WorldToViewportPoint(rootPart.Position)
+                        if rootOnScreen then
+                            boxHeight = math.abs(screenPos.Y - rootPos.Y) * 2
+                            boxWidth = boxHeight * 0.5
+                        end
                     end
                     
-                    -- THANH MÁU
-                    if Config.ESP.HealthBar then
+                    if Config.ESP.ShowHighlight and drawings.Highlight then
+                        drawings.Highlight.Visible = true
+                        drawings.Highlight.Size = Vector2.new(boxWidth + 8, boxHeight + 8)
+                        drawings.Highlight.Position = Vector2.new(screenPos.X - (boxWidth + 8)/2, screenPos.Y - boxHeight/2 - 4)
+                        drawings.Highlight.Color = color
+                    else
+                        if drawings.Highlight then drawings.Highlight.Visible = false end
+                    end
+                    
+                    if Config.ESP.ShowBox and drawings.Box then
+                        drawings.Box.Visible = true
+                        drawings.Box.Size = Vector2.new(boxWidth, boxHeight)
+                        drawings.Box.Position = Vector2.new(screenPos.X - boxWidth/2, screenPos.Y - boxHeight/2)
+                        drawings.Box.Color = color
+                    else
+                        if drawings.Box then drawings.Box.Visible = false end
+                    end
+                    
+                    if Config.ESP.ShowName and drawings.Name then
+                        drawings.Name.Visible = true
+                        drawings.Name.Text = player.Name
+                        drawings.Name.Position = Vector2.new(screenPos.X, screenPos.Y - boxHeight/2 - 20)
+                        drawings.Name.Color = color
+                    else
+                        if drawings.Name then drawings.Name.Visible = false end
+                    end
+                    
+                    if Config.ESP.HealthBar and drawings.HealthBar and drawings.HealthBarFill then
                         local healthPercent = humanoid.Health / humanoid.MaxHealth
-                        local barWidth = 70
-                        local barHeight = 6
+                        local barWidth = 50
+                        local barHeight = 4
                         
-                        -- Nền thanh máu
                         drawings.HealthBar.Visible = true
                         drawings.HealthBar.Size = Vector2.new(barWidth, barHeight)
-                        drawings.HealthBar.Position = Vector2.new(screenPos.X - barWidth/2, screenPos.Y - 25)
+                        drawings.HealthBar.Position = Vector2.new(screenPos.X - barWidth/2, screenPos.Y + boxHeight/2 + 5)
                         drawings.HealthBar.Color = Color3.fromRGB(40, 40, 40)
                         drawings.HealthBar.Filled = true
                         
-                        -- Thanh máu thực
                         drawings.HealthBarFill.Visible = true
                         drawings.HealthBarFill.Size = Vector2.new(barWidth * healthPercent, barHeight)
-                        drawings.HealthBarFill.Position = Vector2.new(screenPos.X - barWidth/2, screenPos.Y - 25)
-                        drawings.HealthBarFill.Color = Color3.fromRGB(
-                            255 * (1 - healthPercent),
-                            255 * healthPercent,
-                            0
-                        )
+                        drawings.HealthBarFill.Position = Vector2.new(screenPos.X - barWidth/2, screenPos.Y + boxHeight/2 + 5)
+                        drawings.HealthBarFill.Color = Color3.fromRGB(255 * (1 - healthPercent), 255 * healthPercent, 0)
                         drawings.HealthBarFill.Filled = true
-                        
-                        -- SỐ MÁU
-                        if Config.ESP.ShowHealth then
-                            drawings.HealthText.Visible = true
-                            drawings.HealthText.Text = math.floor(humanoid.Health) .. "/" .. math.floor(humanoid.MaxHealth)
-                            drawings.HealthText.Position = Vector2.new(screenPos.X, screenPos.Y - 45)
-                            drawings.HealthText.Color = Color3.fromRGB(255, 255, 255)
-                        else
-                            drawings.HealthText.Visible = false
-                        end
                     else
-                        drawings.HealthBar.Visible = false
-                        drawings.HealthBarFill.Visible = false
-                        drawings.HealthText.Visible = false
+                        if drawings.HealthBar then drawings.HealthBar.Visible = false end
+                        if drawings.HealthBarFill then drawings.HealthBarFill.Visible = false end
                     end
                     
-                    -- KHOẢNG CÁCH
-                    if Config.ESP.ShowDistance then
+                    if Config.ESP.ShowHealth and drawings.HealthText then
+                        drawings.HealthText.Visible = true
+                        drawings.HealthText.Text = math.floor(humanoid.Health) .. "/" .. math.floor(humanoid.MaxHealth)
+                        drawings.HealthText.Position = Vector2.new(screenPos.X, screenPos.Y + boxHeight/2 + 20)
+                        drawings.HealthText.Color = Color3.fromRGB(255, 255, 255)
+                    else
+                        if drawings.HealthText then drawings.HealthText.Visible = false end
+                    end
+                    
+                    if Config.ESP.ShowDistance and drawings.DistanceText then
                         drawings.DistanceText.Visible = true
                         drawings.DistanceText.Text = math.floor(distance) .. "m"
-                        drawings.DistanceText.Position = Vector2.new(screenPos.X, screenPos.Y - 55)
+                        drawings.DistanceText.Position = Vector2.new(screenPos.X, screenPos.Y - boxHeight/2 - 35)
                         drawings.DistanceText.Color = Color3.fromRGB(255, 255, 255)
                     else
-                        drawings.DistanceText.Visible = false
+                        if drawings.DistanceText then drawings.DistanceText.Visible = false end
                     end
                     
                 else
@@ -488,24 +529,49 @@ local function UpdateESP()
     end
 end
 
--- ==================== MOBILE-STYLE UI ====================
+-- ==================== HÀM BẬT/TẮT RADAR ====================
+local function ToggleRadar(state)
+    RadarToggleState = state
+    if state then
+        -- Bật Radar: Load script từ link
+        if not RadarInstance then
+            local success, result = pcall(function()
+                -- Load và chạy script radar
+                RadarInstance = loadstring(game:HttpGet("https://raw.githubusercontent.com/bonhub2013/radar/refs/heads/main/README.md"))()
+            end)
+            if not success then
+                warn("Lỗi khi tải Radar:", result)
+                RadarToggleState = false
+                return false
+            end
+        end
+    else
+        -- Tắt Radar: Dọn dẹp
+        if RadarInstance then
+            -- Xóa GUI radar nếu nó tự tạo
+            local radarGui = game:GetService("CoreGui"):FindFirstChild("RadarUltimateV3")
+            if radarGui then
+                radarGui:Destroy()
+            end
+            RadarInstance = nil
+        end
+    end
+    return true
+end
+
+-- ==================== MOBILE UI (CÓ NÚT RADAR) ====================
 local function CreateMobileUI()
-    -- Tạo ScreenGui
     local screenGui = Instance.new("ScreenGui")
     screenGui.Name = "VnMobileUI"
     screenGui.ResetOnSpawn = false
     screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     
-    if syn and syn.protect_gui then
-        syn.protect_gui(screenGui)
-    end
-    
+    if syn and syn.protect_gui then syn.protect_gui(screenGui) end
     screenGui.Parent = game:GetService("CoreGui")
     
-    -- Main Container
     local mainFrame = Instance.new("Frame")
     mainFrame.Name = "MainFrame"
-    mainFrame.Size = UDim2.new(0, 320, 0, 480)
+    mainFrame.Size = UDim2.new(0, 320, 0, 700) -- Tăng chiều cao để chứa nút radar
     mainFrame.Position = UDim2.new(0.02, 0, 0.02, 0)
     mainFrame.BackgroundColor3 = Config.UI.BackgroundColor
     mainFrame.BackgroundTransparency = 0.05
@@ -515,19 +581,16 @@ local function CreateMobileUI()
     mainFrame.ClipsDescendants = true
     mainFrame.Parent = screenGui
     
-    -- Rounded corners
     local corner = Instance.new("UICorner")
     corner.CornerRadius = UDim.new(0, 12)
     corner.Parent = mainFrame
     
-    -- Shadow
     local stroke = Instance.new("UIStroke")
     stroke.Color = Color3.fromRGB(0, 0, 0)
     stroke.Thickness = 2
     stroke.Transparency = 0.7
     stroke.Parent = mainFrame
     
-    -- Header
     local header = Instance.new("Frame")
     header.Size = UDim2.new(1, 0, 0, 50)
     header.BackgroundColor3 = Color3.fromRGB(35, 35, 50)
@@ -538,19 +601,17 @@ local function CreateMobileUI()
     headerCorner.CornerRadius = UDim.new(0, 12)
     headerCorner.Parent = header
     
-    -- Title
     local title = Instance.new("TextLabel")
-    title.Text = "🎯 V/n CONTROL"
+    title.Text = "🎯 V/n CONTROL v7.0"
     title.Size = UDim2.new(1, -60, 1, 0)
     title.Position = UDim2.new(0, 15, 0, 0)
     title.BackgroundTransparency = 1
     title.TextColor3 = Config.UI.AccentColor
     title.Font = Enum.Font.GothamBold
-    title.TextSize = 22
+    title.TextSize = 20
     title.TextXAlignment = Enum.TextXAlignment.Left
     title.Parent = header
     
-    -- Close button
     local closeBtn = Instance.new("TextButton")
     closeBtn.Text = "−"
     closeBtn.Size = UDim2.new(0, 40, 0, 40)
@@ -566,7 +627,6 @@ local function CreateMobileUI()
     btnCorner.CornerRadius = UDim.new(0, 8)
     btnCorner.Parent = closeBtn
     
-    -- Content area
     local scrollFrame = Instance.new("ScrollingFrame")
     scrollFrame.Size = UDim2.new(1, 0, 1, -55)
     scrollFrame.Position = UDim2.new(0, 0, 0, 55)
@@ -580,7 +640,7 @@ local function CreateMobileUI()
     listLayout.Padding = UDim.new(0, 12)
     listLayout.Parent = scrollFrame
     
-    -- ==================== AIMBOT SECTION ====================
+    -- AIMBOT SECTION
     local aimbotSection = Instance.new("Frame")
     aimbotSection.Name = "AimbotSection"
     aimbotSection.Size = UDim2.new(1, -20, 0, 140)
@@ -594,7 +654,7 @@ local function CreateMobileUI()
     sectionCorner.Parent = aimbotSection
     
     local sectionTitle = Instance.new("TextLabel")
-    sectionTitle.Text = "🎯 AUTO AIMBOT (75%)"
+    sectionTitle.Text = "🎯 AUTO AIMBOT"
     sectionTitle.Size = UDim2.new(1, 0, 0, 40)
     sectionTitle.BackgroundTransparency = 1
     sectionTitle.TextColor3 = Config.UI.AccentColor
@@ -607,7 +667,6 @@ local function CreateMobileUI()
     titlePadding.PaddingLeft = UDim.new(0, 15)
     titlePadding.Parent = sectionTitle
     
-    -- Aimbot toggle
     local aimToggleFrame = Instance.new("Frame")
     aimToggleFrame.Size = UDim2.new(1, -30, 0, 40)
     aimToggleFrame.Position = UDim2.new(0, 15, 0, 40)
@@ -645,7 +704,6 @@ local function CreateMobileUI()
         aimToggleBtn.BackgroundColor3 = Config.Aimbot.Enabled and Config.UI.AccentColor or Color3.fromRGB(60, 60, 80)
     end)
     
-    -- Wall check toggle
     local wallToggleFrame = Instance.new("Frame")
     wallToggleFrame.Size = UDim2.new(1, -30, 0, 40)
     wallToggleFrame.Position = UDim2.new(0, 15, 0, 90)
@@ -653,7 +711,7 @@ local function CreateMobileUI()
     wallToggleFrame.Parent = aimbotSection
     
     local wallToggleLabel = Instance.new("TextLabel")
-    wallToggleLabel.Text = "Wall Check (Bỏ qua súng)"
+    wallToggleLabel.Text = "Wall Check"
     wallToggleLabel.Size = UDim2.new(0.7, 0, 1, 0)
     wallToggleLabel.BackgroundTransparency = 1
     wallToggleLabel.TextColor3 = Config.UI.TextColor
@@ -683,10 +741,10 @@ local function CreateMobileUI()
         wallToggleBtn.BackgroundColor3 = Config.WallCheck.Enabled and Config.UI.AccentColor or Color3.fromRGB(60, 60, 80)
     end)
     
-    -- ==================== ESP SECTION ====================
+    -- ESP SECTION
     local espSection = Instance.new("Frame")
     espSection.Name = "ESPSection"
-    espSection.Size = UDim2.new(1, -20, 0, 160)
+    espSection.Size = UDim2.new(1, -20, 0, 250)
     espSection.Position = UDim2.new(0, 10, 0, 162)
     espSection.BackgroundColor3 = Color3.fromRGB(35, 35, 50)
     espSection.BorderSizePixel = 0
@@ -697,7 +755,7 @@ local function CreateMobileUI()
     espCorner.Parent = espSection
     
     local espTitle = Instance.new("TextLabel")
-    espTitle.Text = "👁️ ESP (4000m)"
+    espTitle.Text = "👁️ ESP"
     espTitle.Size = UDim2.new(1, 0, 0, 40)
     espTitle.BackgroundTransparency = 1
     espTitle.TextColor3 = Config.UI.AccentColor
@@ -710,7 +768,6 @@ local function CreateMobileUI()
     espPadding.PaddingLeft = UDim.new(0, 15)
     espPadding.Parent = espTitle
     
-    -- ESP toggle
     local espToggleFrame = Instance.new("Frame")
     espToggleFrame.Size = UDim2.new(1, -30, 0, 40)
     espToggleFrame.Position = UDim2.new(0, 15, 0, 40)
@@ -749,7 +806,6 @@ local function CreateMobileUI()
         UpdateESP()
     end)
     
-    -- ESP features grid
     local featuresGrid = Instance.new("Frame")
     featuresGrid.Size = UDim2.new(1, -30, 0, 70)
     featuresGrid.Position = UDim2.new(0, 15, 0, 90)
@@ -786,11 +842,61 @@ local function CreateMobileUI()
         end)
     end
     
-    -- ==================== POV CIRCLE SECTION ====================
+    local boxHighlightFrame = Instance.new("Frame")
+    boxHighlightFrame.Size = UDim2.new(1, -30, 0, 40)
+    boxHighlightFrame.Position = UDim2.new(0, 15, 0, 170)
+    boxHighlightFrame.BackgroundTransparency = 1
+    boxHighlightFrame.Parent = espSection
+    
+    local boxBtn = Instance.new("TextButton")
+    boxBtn.Text = Config.ESP.ShowBox and "📦 BOX: BẬT" or "📦 BOX: TẮT"
+    boxBtn.Size = UDim2.new(0.48, 0, 0, 30)
+    boxBtn.Position = UDim2.new(0, 0, 0, 0)
+    boxBtn.BackgroundColor3 = Config.ESP.ShowBox and Config.UI.AccentColor or Color3.fromRGB(60, 60, 80)
+    boxBtn.TextColor3 = Config.UI.TextColor
+    boxBtn.Font = Enum.Font.Gotham
+    boxBtn.TextSize = 12
+    boxBtn.AutoButtonColor = false
+    boxBtn.Parent = boxHighlightFrame
+    
+    local boxCorner = Instance.new("UICorner")
+    boxCorner.CornerRadius = UDim.new(0, 6)
+    boxCorner.Parent = boxBtn
+    
+    boxBtn.MouseButton1Click:Connect(function()
+        Config.ESP.ShowBox = not Config.ESP.ShowBox
+        boxBtn.Text = Config.ESP.ShowBox and "📦 BOX: BẬT" or "📦 BOX: TẮT"
+        boxBtn.BackgroundColor3 = Config.ESP.ShowBox and Config.UI.AccentColor or Color3.fromRGB(60, 60, 80)
+        UpdateESP()
+    end)
+    
+    local highlightBtn = Instance.new("TextButton")
+    highlightBtn.Text = Config.ESP.ShowHighlight and "✨ HIGHLIGHT: BẬT" or "✨ HIGHLIGHT: TẮT"
+    highlightBtn.Size = UDim2.new(0.48, 0, 0, 30)
+    highlightBtn.Position = UDim2.new(0.52, 0, 0, 0)
+    highlightBtn.BackgroundColor3 = Config.ESP.ShowHighlight and Config.UI.AccentColor or Color3.fromRGB(60, 60, 80)
+    highlightBtn.TextColor3 = Config.UI.TextColor
+    highlightBtn.Font = Enum.Font.Gotham
+    highlightBtn.TextSize = 12
+    highlightBtn.AutoButtonColor = false
+    highlightBtn.Parent = boxHighlightFrame
+    
+    local highlightCorner = Instance.new("UICorner")
+    highlightCorner.CornerRadius = UDim.new(0, 6)
+    highlightCorner.Parent = highlightBtn
+    
+    highlightBtn.MouseButton1Click:Connect(function()
+        Config.ESP.ShowHighlight = not Config.ESP.ShowHighlight
+        highlightBtn.Text = Config.ESP.ShowHighlight and "✨ HIGHLIGHT: BẬT" or "✨ HIGHLIGHT: TẮT"
+        highlightBtn.BackgroundColor3 = Config.ESP.ShowHighlight and Config.UI.AccentColor or Color3.fromRGB(60, 60, 80)
+        UpdateESP()
+    end)
+    
+    -- POV SECTION
     local povSection = Instance.new("Frame")
     povSection.Name = "POVSection"
     povSection.Size = UDim2.new(1, -20, 0, 130)
-    povSection.Position = UDim2.new(0, 10, 0, 332)
+    povSection.Position = UDim2.new(0, 10, 0, 422)
     povSection.BackgroundColor3 = Color3.fromRGB(35, 35, 50)
     povSection.BorderSizePixel = 0
     povSection.Parent = scrollFrame
@@ -800,7 +906,7 @@ local function CreateMobileUI()
     povCorner.Parent = povSection
     
     local povTitle = Instance.new("TextLabel")
-    povTitle.Text = "⭕ POV CIRCLE (50-200)"
+    povTitle.Text = "⭕ POV CIRCLE"
     povTitle.Size = UDim2.new(1, 0, 0, 40)
     povTitle.BackgroundTransparency = 1
     povTitle.TextColor3 = Config.UI.AccentColor
@@ -813,7 +919,6 @@ local function CreateMobileUI()
     povPadding.PaddingLeft = UDim.new(0, 15)
     povPadding.Parent = povTitle
     
-    -- POV toggle
     local povToggleFrame = Instance.new("Frame")
     povToggleFrame.Size = UDim2.new(1, -30, 0, 40)
     povToggleFrame.Position = UDim2.new(0, 15, 0, 40)
@@ -849,14 +954,12 @@ local function CreateMobileUI()
         Config.POVCircle.Enabled = not Config.POVCircle.Enabled
         povToggleBtn.Text = Config.POVCircle.Enabled and "BẬT" or "TẮT"
         povToggleBtn.BackgroundColor3 = Config.POVCircle.Enabled and Config.UI.AccentColor or Color3.fromRGB(60, 60, 80)
-        
         if Drawings.POV.Outer then
             Drawings.POV.Outer.Visible = Config.POVCircle.Enabled
             Drawings.POV.Inner.Visible = Config.POVCircle.Enabled
         end
     end)
     
-    -- Radius slider
     local radiusFrame = Instance.new("Frame")
     radiusFrame.Size = UDim2.new(1, -30, 0, 40)
     radiusFrame.Position = UDim2.new(0, 15, 0, 90)
@@ -891,9 +994,9 @@ local function CreateMobileUI()
             num = math.clamp(num, Config.POVCircle.MinRadius, Config.POVCircle.MaxRadius)
             Config.POVCircle.OuterRadius = num
             Config.POVCircle.InnerRadius = math.floor(num / 2)
+            Config.Aimbot.FOV = num
             radiusLabel.Text = "Bán kính: " .. num
             radiusInput.Text = tostring(num)
-            
             if Drawings.POV.Outer then
                 Drawings.POV.Outer.Radius = num
                 Drawings.POV.Inner.Radius = math.floor(num / 2)
@@ -901,74 +1004,77 @@ local function CreateMobileUI()
         end
     end)
     
-    -- ==================== QUICK ACTIONS BAR ====================
-    local quickActions = Instance.new("Frame")
-    quickActions.Size = UDim2.new(1, -20, 0, 60)
-    quickActions.Position = UDim2.new(0, 10, 0, 472)
-    quickActions.BackgroundColor3 = Color3.fromRGB(35, 35, 50)
-    quickActions.BorderSizePixel = 0
-    quickActions.Parent = scrollFrame
+    -- ==================== NÚT RADAR BUTTON (ĐÃ THÊM) ====================
+    local radarSection = Instance.new("Frame")
+    radarSection.Name = "RadarToggleSection"
+    radarSection.Size = UDim2.new(1, -20, 0, 60)
+    radarSection.Position = UDim2.new(0, 10, 0, 562)
+    radarSection.BackgroundColor3 = Color3.fromRGB(35, 35, 50)
+    radarSection.BorderSizePixel = 0
+    radarSection.Parent = scrollFrame
+
+    local radarCorner = Instance.new("UICorner")
+    radarCorner.CornerRadius = UDim.new(0, 8)
+    radarCorner.Parent = radarSection
+
+    local radarTitle = Instance.new("TextLabel")
+    radarTitle.Text = "📡 RADAR ULTIMATE V3"
+    radarTitle.Size = UDim2.new(1, -30, 0, 30)
+    radarTitle.Position = UDim2.new(0, 15, 0, 5)
+    radarTitle.BackgroundTransparency = 1
+    radarTitle.TextColor3 = Config.UI.AccentColor
+    radarTitle.Font = Enum.Font.GothamBold
+    radarTitle.TextSize = 16
+    radarTitle.TextXAlignment = Enum.TextXAlignment.Left
+    radarTitle.Parent = radarSection
+
+    local radarToggleFrame = Instance.new("Frame")
+    radarToggleFrame.Size = UDim2.new(1, -30, 0, 30)
+    radarToggleFrame.Position = UDim2.new(0, 15, 0, 35)
+    radarToggleFrame.BackgroundTransparency = 1
+    radarToggleFrame.Parent = radarSection
+
+    local radarToggleLabel = Instance.new("TextLabel")
+    radarToggleLabel.Text = "Bật Radar"
+    radarToggleLabel.Size = UDim2.new(0.7, 0, 1, 0)
+    radarToggleLabel.BackgroundTransparency = 1
+    radarToggleLabel.TextColor3 = Config.UI.TextColor
+    radarToggleLabel.Font = Enum.Font.Gotham
+    radarToggleLabel.TextSize = 14
+    radarToggleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    radarToggleLabel.Parent = radarToggleFrame
+
+    local radarToggleBtn = Instance.new("TextButton")
+    radarToggleBtn.Name = "RadarToggleButton"
+    radarToggleBtn.Text = "TẮT"
+    radarToggleBtn.Size = UDim2.new(0, 60, 0, 25)
+    radarToggleBtn.Position = UDim2.new(1, -60, 0.5, -12.5)
+    radarToggleBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+    radarToggleBtn.TextColor3 = Config.UI.TextColor
+    radarToggleBtn.Font = Enum.Font.Gotham
+    radarToggleBtn.TextSize = 14
+    radarToggleBtn.AutoButtonColor = false
+    radarToggleBtn.Parent = radarToggleFrame
+
+    local radarBtnCorner = Instance.new("UICorner")
+    radarBtnCorner.CornerRadius = UDim.new(0, 6)
+    radarBtnCorner.Parent = radarToggleBtn
+
+    -- Xử lý sự kiện click cho nút Radar
+    radarToggleBtn.MouseButton1Click:Connect(function()
+        RadarToggleState = not RadarToggleState
+        ToggleRadar(RadarToggleState)
+        radarToggleBtn.Text = RadarToggleState and "BẬT" or "TẮT"
+        radarToggleBtn.BackgroundColor3 = RadarToggleState and Config.UI.AccentColor or Color3.fromRGB(60, 60, 80)
+    end)
+    -- ==================== KẾT THÚC NÚT RADAR ====================
     
-    local actionsCorner = Instance.new("UICorner")
-    actionsCorner.CornerRadius = UDim.new(0, 8)
-    actionsCorner.Parent = quickActions
-    
-    local actions = {
-        {text = "🎯 AIM", func = function()
-            Config.Aimbot.Enabled = not Config.Aimbot.Enabled
-            aimToggleBtn.Text = Config.Aimbot.Enabled and "BẬT" or "TẮT"
-            aimToggleBtn.BackgroundColor3 = Config.Aimbot.Enabled and Config.UI.AccentColor or Color3.fromRGB(60, 60, 80)
-        end},
-        {text = "👁️ ESP", func = function()
-            Config.ESP.Enabled = not Config.ESP.Enabled
-            espToggleBtn.Text = Config.ESP.Enabled and "BẬT" or "TẮT"
-            espToggleBtn.BackgroundColor3 = Config.ESP.Enabled and Config.UI.AccentColor or Color3.fromRGB(60, 60, 80)
-            UpdateESP()
-        end},
-        {text = "🧱 WALL", func = function()
-            Config.WallCheck.Enabled = not Config.WallCheck.Enabled
-            wallToggleBtn.Text = Config.WallCheck.Enabled and "BẬT" or "TẮT"
-            wallToggleBtn.BackgroundColor3 = Config.WallCheck.Enabled and Config.UI.AccentColor or Color3.fromRGB(60, 60, 80)
-        end},
-        {text = "⭕ POV", func = function()
-            Config.POVCircle.Enabled = not Config.POVCircle.Enabled
-            if Drawings.POV.Outer then
-                Drawings.POV.Outer.Visible = Config.POVCircle.Enabled
-                Drawings.POV.Inner.Visible = Config.POVCircle.Enabled
-            end
-            povToggleBtn.Text = Config.POVCircle.Enabled and "BẬT" or "TẮT"
-            povToggleBtn.BackgroundColor3 = Config.POVCircle.Enabled and Config.UI.AccentColor or Color3.fromRGB(60, 60, 80)
-        end}
-    }
-    
-    for i, action in pairs(actions) do
-        local actionBtn = Instance.new("TextButton")
-        actionBtn.Text = action.text
-        actionBtn.Size = UDim2.new(0.22, 0, 0.7, 0)
-        actionBtn.Position = UDim2.new(0.02 + (i-1)*0.245, 0, 0.15, 0)
-        actionBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-        actionBtn.TextColor3 = Config.UI.TextColor
-        actionBtn.Font = Enum.Font.Gotham
-        actionBtn.TextSize = 12
-        actionBtn.AutoButtonColor = false
-        actionBtn.Parent = quickActions
-        
-        local actionCorner = Instance.new("UICorner")
-        actionCorner.CornerRadius = UDim.new(0, 6)
-        actionCorner.Parent = actionBtn
-        
-        actionBtn.MouseButton1Click:Connect(action.func)
-    end
-    
-    -- ==================== UI CONTROLS ====================
-    -- Close button functionality
     closeBtn.MouseButton1Click:Connect(function()
         mainFrame.Visible = not mainFrame.Visible
         closeBtn.Text = mainFrame.Visible and "−" or "+"
         State.UIVisible = mainFrame.Visible
     end)
     
-    -- Right Shift toggle
     UserInputService.InputBegan:Connect(function(input)
         if input.KeyCode == Config.UI.ToggleKey then
             mainFrame.Visible = not mainFrame.Visible
@@ -980,69 +1086,71 @@ local function CreateMobileUI()
     return screenGui
 end
 
--- ==================== VÒNG LẶP CHÍNH ====================
+-- ==================== MAIN LOOP ====================
 local function MainLoop()
     local lastPrint = 0
     
-    while task.wait(0.016) do -- 60 FPS
-        -- Cập nhật vị trí POV circles
+    while task.wait(0.016) do
         UpdatePOVPosition()
-        
-        -- Thực hiện auto aim
         local isAiming = PerformAutoAim()
+        UpdateESP()
         
-        -- Debug info mỗi 3 giây
         local currentTime = tick()
         if currentTime - lastPrint > 3 then
             if isAiming and State.Target then
                 print("🎯 Đang aim: " .. State.Target.Player.Name .. 
-                      " | Khoảng cách: " .. math.floor(State.Target.Distance) .. "m")
+                      " | Khoảng cách: " .. math.floor(State.Target.Distance) .. "m" ..
+                      (State.TargetBehindWall and " [KHUẤT TƯỜNG]" or ""))
             end
             lastPrint = currentTime
         end
-        
-        -- Cập nhật ESP
-        UpdateESP()
     end
 end
 
--- ==================== KHỞI ĐỘNG HỆ THỐNG ====================
+-- ==================== KHỞI TẠO ====================
 print([[
 ╔══════════════════════════════════════════╗
-║       V/n ULTIMATE SUITE v6.0            ║
-║       HOÀN CHỈNH TÍCH HỢP                ║
-║                                          ║
-║  ✅ Auto Aimbot 75% (Không cần phím)     ║
-║  ✅ 2 Vòng POV (Đen → Xanh) 50-200       ║
-║  ✅ Wall Check Thông Minh (Bỏ qua súng)  ║
-║  ✅ ESP 4000m với Tên + Thanh Máu       ║
-║  ✅ UI Mobile-Style Đẹp Mắt              ║
-║                                          ║
-║  Điều Khiển:                            ║
-║  • Right Shift: Ẩn/Hiện UI              ║
-║  • Aimbot TỰ ĐỘNG hoàn toàn             ║
-║  • UI có nút bấm to như điện thoại      ║
+║    V/n ULTIMATE SUITE v7.0               ║
+║    AIMBOT + ESP + POV + RADAR BUTTON     ║
 ╚══════════════════════════════════════════╝
 ]])
 
--- Khởi tạo
+-- Khởi tạo POV
 CreatePOVCircles()
+
+-- Khởi tạo Mobile UI (có nút radar)
 CreateMobileUI()
 
--- Tạo ESP cho players hiện có
+-- Tạo ESP cho player hiện tại
 for _, player in pairs(Players:GetPlayers()) do
     if player ~= LocalPlayer then
         CreateESP(player)
     end
 end
 
--- Xử lý player mới
+-- PlayerAdded handler
 Players.PlayerAdded:Connect(function(player)
-    task.wait(1)
+    if player == LocalPlayer then return end
     CreateESP(player)
+    
+    player.CharacterAdded:Connect(function()
+        task.wait(0.5)
+        if Drawings.ESP[player] then
+            for _, drawing in pairs(Drawings.ESP[player]) do
+                pcall(function() drawing:Remove() end)
+            end
+            Drawings.ESP[player] = nil
+        end
+        CreateESP(player)
+    end)
+    
+    if player.Character then
+        task.wait(0.5)
+        CreateESP(player)
+    end
 end)
 
--- Xử lý player rời
+-- PlayerRemoving handler
 Players.PlayerRemoving:Connect(function(player)
     if Drawings.ESP[player] then
         for _, drawing in pairs(Drawings.ESP[player]) do
@@ -1052,22 +1160,35 @@ Players.PlayerRemoving:Connect(function(player)
     end
 end)
 
--- Bắt đầu vòng lặp
+-- Anti-Afk
+LocalPlayer.Idled:Connect(function()
+    game:GetService("VirtualUser"):CaptureController()
+    game:GetService("VirtualUser"):ClickButton2(Vector2.new())
+end)
+
+-- Chạy main loop
 task.spawn(MainLoop)
 
--- Dọn dẹp
+-- ==================== CLEANUP ====================
 local function Cleanup()
     print("[V/n] Đang dọn dẹp...")
     
+    -- Cleanup POV
     if Drawings.POV.Outer then
         Drawings.POV.Outer:Remove()
         Drawings.POV.Inner:Remove()
     end
     
+    -- Cleanup ESP
     for _, drawings in pairs(Drawings.ESP) do
         for _, drawing in pairs(drawings) do
             pcall(function() drawing:Remove() end)
         end
+    end
+    
+    -- Tắt radar nếu đang chạy
+    if RadarToggleState then
+        ToggleRadar(false)
     end
     
     print("[V/n] Dọn dẹp hoàn tất!")
@@ -1075,6 +1196,7 @@ end
 
 game:BindToClose(Cleanup)
 
-print("✅ V/n đã sẵn sàng hoạt động!")
-print("👉 Nhấn Right Shift để mở UI điều khiển")
-print("🎯 Aimbot sẽ tự động hoạt động khi có mục tiêu trong tầm nhìn!")
+print("✅ V/n v7.0 đã sẵn sàng!")
+print("👉 Nhấn Right Shift để mở UI")
+print("🎯 Aimbot chỉ aim trong POV, có Box ESP + Highlight")
+print("📡 Nút Radar nằm ở cuối UI - Bấm để bật/tắt")
